@@ -20,13 +20,13 @@ pub struct TaskResult {
     pub duration: isize,
 }
 
+pub type UserResult = Result<Vec<TaskResult>, String>;
+
 #[derive(Clone, Debug)]
-pub enum ReportMessage {
-    Report {
-        num_of_users: usize,
-        num_of_failed_users: usize,
-        results: HashMap<String, UrlResults>,
-    }
+pub struct ReportMessage {
+    pub current_users: usize,
+    pub results: Vec<UserResult>,
+    pub duration: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -38,10 +38,7 @@ pub struct UrlResults {
 }
 
 #[derive(Clone, Debug)]
-pub enum StatusMessage {
-    UserCreated {},
-    UserFailed {},
-    UserFinished {
-        results: Vec<TaskResult>,
-    }
+pub enum UserStatus {
+    Created,
+    Finished(UserResult),
 }

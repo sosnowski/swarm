@@ -9,7 +9,7 @@ use url::Url;
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::sync::mpsc::{Sender};
 use crate::config::{Schedule, Task, HttpMethod, RequestDetails, RequestData, Body as BodyType, Url as TaskUrl};
-use crate::runner::{StatusMessage, TaskResult, ErrorType};
+use crate::runner::{TaskResult, ErrorType, UserResult};
 
 type CookiesStore = HashMap<String, String>;
 
@@ -151,9 +151,7 @@ async fn make_request(id: &String, client: &Client<HttpsConnector<HttpConnector>
     return task_result;
 }
 
-pub async fn http_user(schedule: Schedule, status_sender: Sender<StatusMessage>, _done_sender: Sender<bool>) -> () {
-
-    status_sender.send(StatusMessage::UserCreated {}).await.unwrap();
+pub async fn http_user(schedule: Schedule, _done_sender: Sender<bool>) -> UserResult {
 
     let https = HttpsConnector::new();
     let http_client = Client::builder().build::<_, hyper::Body>(https);
@@ -167,14 +165,35 @@ pub async fn http_user(schedule: Schedule, status_sender: Sender<StatusMessage>,
                 let RequestDetails {
                     url,
                     method,
-                    data
+                    data,
+                    repeat
                 } = details;
+
                 let task_id = url.url.clone(); // TODO better ID (for example include METHOD)
 
-                for data_record in data {
-                    let request = build_request(&url, &method, &data_record, &cookies_store).unwrap();
-                    let result = make_request(&task_id, &http_client, &mut cookies_store, request).await;
-                    results.push(result);
+                let repeat = match repeat {
+                    Some(v) => v,
+                    None => 1,
+                };
+
+                let request_data = match data {
+                    Some(data) => data,
+                    None => vec![
+                        RequestData {
+                            params: None,
+                            query: None,
+                            body: None,
+                            headers: None,
+                        }
+                    ],
+                };
+                
+                for _ in 0..repeat {
+                    for data_record in &request_data {
+                        let request = build_request(&url, &method, data_record, &cookies_store).unwrap();
+                        let result = make_request(&task_id, &http_client, &mut cookies_store, request).await;
+                        results.push(result);
+                    }
                 }
             },
             Task::Wait(duration) => {
@@ -183,5 +202,5 @@ pub async fn http_user(schedule: Schedule, status_sender: Sender<StatusMessage>,
         }
     }
 
-    status_sender.send(StatusMessage::UserFinished { results: results }).await.unwrap();
+    return Ok(results);
 }
