@@ -3,35 +3,36 @@ use tokio::time::{Duration, Instant, interval};
 use tokio::task::JoinHandle;
 
 use crate::config::{Config};
-use crate::runner::UserResult;
+use crate::runner::{UserResult, Scheduler};
 use crate::user::http_user;
 use super::{ReportMessage, UserStatus};
 
-fn manage_users(config: &Config, users_counter: usize, status_sender: &Sender<UserStatus>, done_sender: &Sender<bool>) -> () {
-    if users_counter < config.users {
-        let mut to_add = config.users - users_counter;
-        if to_add > 20 {
-            to_add = 20;
-        }
+fn spawn_users(config: &Config, mut users_to_add: usize, status_sender: &Sender<UserStatus>) -> () {
 
-        let mut i = 0;
-        while i < to_add {
-            let schedule = config.schedule.clone();
-            let status_sender = status_sender.clone();
-            let done_sender = done_sender.clone();
-            tokio::spawn(async move {
-                status_sender.send(UserStatus::Created).await.unwrap();
-                let user_result = http_user(schedule, done_sender).await;
-                status_sender.send(UserStatus::Finished(user_result)).await.unwrap();
-            });
-            i += 1;
-        }
+    if users_to_add == 0 {
+        return;
+    }
+
+    if users_to_add > 20 {
+        users_to_add = 20;
+    }
+
+    let mut i = 0;
+    while i < users_to_add {
+        let schedule = config.schedule.clone();
+        let status_sender = status_sender.clone();
+        tokio::spawn(async move {
+            status_sender.send(UserStatus::Created).await.unwrap();
+            let user_result = http_user(schedule).await;
+            status_sender.send(UserStatus::Finished(user_result)).await.unwrap();
+        });
+        i += 1;
     }
 }
 
 async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
     let (status_sender, mut status_receiver) = channel::<UserStatus>(1000);
-    let (done_sender, mut done_receiver) = channel::<bool>(1);
+    // let (done_sender, mut done_receiver) = channel::<bool>(1);
 
     let started_at = Instant::now();
     let mut interval = interval(Duration::from_millis(200));
@@ -39,9 +40,12 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
     let mut users_counter: usize = 0;
     let mut queued_results: Vec<UserResult> = vec![];
 
+    let mut scheduler = Scheduler::new(config.workload.clone());
+
     loop {
         tokio::select! {
             _ = interval.tick() => {
+
                 // send aggregated results
                 println!("Sending report...");
                 report_sender.send(ReportMessage {
@@ -52,10 +56,12 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
 
                 queued_results.clear();
 
-                if started_at.elapsed().as_secs() <= config.duration.try_into().unwrap() {
-                    manage_users(&config, users_counter, &status_sender, &done_sender);
+                let target_num_users = scheduler.next();
+
+                if let Some(target_num_users) = target_num_users {
+                    spawn_users(&config, target_num_users - users_counter, &status_sender);
                 } else {
-                    println!("Time out, waiting for users to finish....");
+                    println!("Scheduler is done, waiting for users to finish....");
 
                     if users_counter == 0 {
                         //wait till all users finish
@@ -82,7 +88,7 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
                     },
                     None => {}
                 }
-            }
+            },
         }
     }
     println!("Runner is finished");

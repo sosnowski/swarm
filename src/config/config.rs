@@ -48,22 +48,47 @@ pub enum HttpMethod {
     DELETE
 }
 
+// https://stackoverflow.com/questions/8316882/what-is-an-easing-function
+#[derive(Clone, Debug)]
+pub enum Workload {
+    Constant {
+        duration: usize,
+        max_users: usize,
+    },
+    Linear {
+        duration: usize,
+        max_users: usize,
+        ramp_up_time: usize,
+    },
+    EaseOut {
+        duration: usize,
+        max_users: usize,
+        ramp_up_time: usize,
+    },
+    Sin {
+        duration: usize,
+        max_users: usize,
+        min_users: usize,
+        cycle_time: usize,
+    },
+}
+
+
 
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub duration: usize,
-    pub users: usize,
-    pub warmup: usize,
+    pub workload: Workload,
     pub schedule: Schedule,
 }
 
 impl Config {
     pub fn new() -> Config {
         return Config {
-            duration: 30,
-            users: 100,
-            warmup: 0,
+            workload: Workload::Constant {
+                duration: 30,
+                max_users: 10,
+            },
             schedule: Schedule {
                 tasks: vec![
                     Task::Request(RequestDetails {

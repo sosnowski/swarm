@@ -151,7 +151,7 @@ async fn make_request(id: &String, client: &Client<HttpsConnector<HttpConnector>
     return task_result;
 }
 
-pub async fn http_user(schedule: Schedule, _done_sender: Sender<bool>) -> UserResult {
+pub async fn http_user(schedule: Schedule) -> UserResult {
 
     let https = HttpsConnector::new();
     let http_client = Client::builder().build::<_, hyper::Body>(https);
