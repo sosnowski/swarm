@@ -59,6 +59,7 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
                 let target_num_users = scheduler.next();
 
                 if let Some(target_num_users) = target_num_users {
+                    println!("======== Scheduler: {}", target_num_users);
                     spawn_users(&config, target_num_users - users_counter, &status_sender);
                 } else {
                     println!("Scheduler is done, waiting for users to finish....");

@@ -85,9 +85,10 @@ pub struct Config {
 impl Config {
     pub fn new() -> Config {
         return Config {
-            workload: Workload::Constant {
-                duration: 30,
-                max_users: 10,
+            workload: Workload::Linear {
+                duration: 50,
+                max_users: 30,
+                ramp_up_time: 30,
             },
             schedule: Schedule {
                 tasks: vec![
