@@ -86,9 +86,9 @@ impl Config {
     pub fn new() -> Config {
         return Config {
             workload: Workload::Linear {
-                duration: 50,
+                duration: 20,
                 max_users: 30,
-                ramp_up_time: 30,
+                ramp_up_time: 20,
             },
             schedule: Schedule {
                 tasks: vec![

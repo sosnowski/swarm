@@ -47,7 +47,6 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
             _ = interval.tick() => {
 
                 // send aggregated results
-                println!("Sending report...");
                 report_sender.send(ReportMessage {
                     current_users: users_counter,
                     results: queued_results.clone(),
@@ -59,14 +58,10 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
                 let target_num_users = scheduler.next();
 
                 if let Some(target_num_users) = target_num_users {
-                    println!("======== Scheduler: {}", target_num_users);
                     spawn_users(&config, target_num_users - users_counter, &status_sender);
                 } else {
-                    println!("Scheduler is done, waiting for users to finish....");
-
                     if users_counter == 0 {
                         //wait till all users finish
-                        println!("All users are done");
                         break;
                     }
                     
@@ -81,7 +76,6 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
                                 users_counter += 1;
                             },
                             UserStatus::Finished(result) => {
-                                println!("User is finished");
                                 users_counter -= 1;
                                 queued_results.push(result);
                             },

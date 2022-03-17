@@ -1,11 +1,32 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, Arc};
+use std::io;
 use tokio::sync::mpsc::{Receiver};
 use tokio::time::{Duration, interval, sleep};
 use tokio::task::{JoinHandle};
+use console::Term;
 use crate::runner::{ReportMessage, ErrorType, TaskResult, UrlResults};
 
 use crate::config::Config;
+
+struct AggregatedResults {
+    num_of_failed_users: usize,
+    current_users: usize,
+    duration: usize,
+
+    url_results: HashMap<String, UrlResults>,
+}
+
+impl AggregatedResults {
+    fn new() -> AggregatedResults {
+        return AggregatedResults {
+            num_of_failed_users: 0,
+            current_users: 0,
+            duration: 0,
+            url_results: HashMap::new(),
+        };
+    }
+}
 
 fn print_error_type(err_type: &ErrorType) -> &'static str {
     return match err_type {
@@ -17,11 +38,51 @@ fn print_error_type(err_type: &ErrorType) -> &'static str {
         ErrorType::Timeout => "Timeout",
     };
 }
+struct Terminal {
+    count_lines: usize,
+    term: Term,
+}
 
-fn aggregate_results(aggregated_results: &mut HashMap<String, UrlResults>, results: Vec<TaskResult>) -> () {
+impl Terminal {
+    fn new() -> Terminal {
+        return Terminal { count_lines: 0, term: Term::stdout() };
+    }
+
+    fn log_results(&mut self, results: &AggregatedResults) -> io::Result<()> {
+        let term = &self.term;
+        term.write_line("================== REPORT ==================")?;
+        term.write_line(&format!("Number of users: {}, failed users: {}", results.current_users, results.num_of_failed_users))?;
+        term.write_line(&format!("Duration: {}", results.duration))?;
+
+        for (id, result) in results.url_results.iter() {
+            term.write_line(&format!("\t ID: {}", id))?;
+            term.write_line(&format!("\t\t Number of requests: {}", result.num_of_requests))?;
+            term.write_line(&format!("\t\t Number of errors: {}", result.num_of_errors))?;
+            for (err_type, counter) in result.error_types.iter() {
+                term.write_line(&format!("\t\t\t{} errror: {}", print_error_type(err_type), counter))?;
+                self.count_lines += 1;
+            }
+            term.write_line(&format!("\t\t Average duration: {}", result.average_duration))?;
+            self.count_lines += 4;
+        }
+        term.write_line("=============================================")?;
+        self.count_lines += 4;
+        return Ok(());
+    }
+
+    fn clear_results(&mut self) -> io::Result<()> {
+        if self.count_lines > 0 {
+            self.term.clear_last_lines(self.count_lines)?;
+            self.count_lines = 0;
+        }
+        return Ok(());
+    }
+}
+
+fn aggregate_results(url_results: &mut HashMap<String, UrlResults>, results: Vec<TaskResult>) -> () {
     
     for result in results.into_iter() {
-        let entry = aggregated_results.entry(result.id).or_insert(UrlResults {
+        let entry = url_results.entry(result.id).or_insert(UrlResults {
             num_of_requests: 0,
             num_of_errors: 0,
             average_duration: 0,
@@ -39,53 +100,38 @@ fn aggregate_results(aggregated_results: &mut HashMap<String, UrlResults>, resul
     }
 }
 
-fn log_results(current_users: usize, num_of_failed_users: usize, duration: usize, aggregated_results: &HashMap<String, UrlResults>) -> () {
-    println!("================== REPORT ==================");
-    println!("Number of users: {}, failed users: {}", current_users, num_of_failed_users);
-    println!("Duration: {}", duration);
-    for (id, result) in aggregated_results.iter() {
-        println!("\t ID: {}", id);
-        println!("\t\t Number of requests: {}", result.num_of_requests);
-        println!("\t\t Number of errors: {}", result.num_of_errors);
-        for (err_type, counter) in result.error_types.iter() {
-            println!("\t\t\t{} errror: {}", print_error_type(err_type), counter);
-        }
-        println!("\t\t Average duration: {}", result.average_duration);
-    }
-    println!("=============================================")
-}
-
 async fn aggregator(_config: Config, mut report_receiver: Receiver<ReportMessage>) -> () {
-    let mut num_of_failed_users = 0;
-    let mut current_users = 0;
-    let mut duration = 0;
-    let mut aggregated_results = HashMap::<String, UrlResults>::new();
+    let mut aggregated_results = AggregatedResults::new();
+    let mut terminal = Terminal::new();
 
     let mut interval = interval(Duration::from_secs(1));
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                log_results(current_users, num_of_failed_users, duration, &aggregated_results);
+                terminal.clear_results().unwrap();
+                terminal.log_results(&aggregated_results).unwrap();
             },
             msg = report_receiver.recv() => {
                 match msg {
                     Some (report_msg) => {
-                        current_users = report_msg.current_users;
-                        duration = report_msg.duration;
+                        aggregated_results.current_users = report_msg.current_users;
+                        aggregated_results.duration = report_msg.duration;
+
                         for task_result in report_msg.results.into_iter() {
                             match task_result {
                                 Ok(res) => {
-                                    aggregate_results(&mut aggregated_results, res);
+                                    aggregate_results(&mut aggregated_results.url_results, res);
                                 },
                                 Err(msg) => {
-                                    num_of_failed_users += 1;
+                                    aggregated_results.num_of_failed_users += 1;
                                 }
                             }
                         }
                     },
                     None => {
-                        log_results(current_users, num_of_failed_users, duration, &aggregated_results);
+                        terminal.clear_results().unwrap();
+                        terminal.log_results(&aggregated_results).unwrap();
                         break;
                     }
                 }
