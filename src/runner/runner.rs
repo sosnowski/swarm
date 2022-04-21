@@ -86,7 +86,6 @@ async fn runner(config: Config, report_sender: Sender<ReportMessage>) -> () {
             },
         }
     }
-    println!("Runner is finished");
 }
 
 pub struct Runner {

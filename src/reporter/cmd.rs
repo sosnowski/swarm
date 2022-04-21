@@ -1,13 +1,20 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, Arc};
 use std::io;
 use tokio::sync::mpsc::{Receiver};
-use tokio::time::{Duration, interval, sleep};
+use tokio::time::{Duration, interval};
 use tokio::task::{JoinHandle};
 use console::Term;
-use crate::runner::{ReportMessage, ErrorType, TaskResult, UrlResults};
+use crate::runner::{ReportMessage, ErrorType, TaskResult};
 
 use crate::config::Config;
+
+#[derive(Clone, Debug)]
+pub struct UrlResults {
+    pub num_of_requests: usize,
+    pub durations: HashMap<usize, usize>,
+    pub num_of_errors: usize,
+    pub error_types: HashMap<ErrorType, usize>,
+}
 
 struct AggregatedResults {
     num_of_failed_users: usize,
@@ -38,6 +45,92 @@ fn print_error_type(err_type: &ErrorType) -> &'static str {
         ErrorType::Timeout => "Timeout",
     };
 }
+
+struct UrlStats {
+    average: usize,
+    p99: usize,
+    p95: usize,
+    mean: usize,
+}
+fn calculate_stats(durations: &HashMap<usize, usize>) -> UrlStats {
+
+    if durations.len() == 0 {
+        return UrlStats {
+            average: 0,
+            p99: 0,
+            p95: 0,
+            mean: 0,
+        };
+    }
+
+    let mut len = 0;
+    let mut sum_duration = 0;
+
+    for (duration, counter) in durations {
+        len += *counter;
+        sum_duration += *duration * *counter;
+    }
+
+    // average
+    let avg = sum_duration / len;
+
+    // mean
+    let mut mean = 0;
+    let mut middle = len / 2;
+    let mut second_value = false;
+
+    let mut curr_index = 1;
+    let mut keys: Vec<&usize> = durations.keys().collect();
+    keys.sort();
+
+    for duration in keys.iter() {
+        if let Some(counter) = durations.get(duration) {
+            if middle >= curr_index && middle < curr_index + *counter {
+                if len % 2 == 0 {
+                    mean = **duration;
+                    break;
+                } else {
+                    if !second_value {
+                        mean = **duration;
+                        middle += 1;
+                        second_value = true; // iterate again to get next "middle" value
+                    } else {
+                        mean = (mean + *duration) / 2;
+                        break;
+                    }
+                }
+            }
+            curr_index += *counter;
+        }
+    }
+
+    // entry.average_duration = entry.average_duration + ((result.duration - entry.average_duration) / (entry.num_of_requests as isize - entry.num_of_errors as isize));
+    //p99
+
+    let p99 = len as f32 * 0.99;
+    let p95 = len as f32 * 0.95;
+
+    let mut p99_average = 0;
+    let mut p95_average = 0;
+
+    let mut curr_index = 1;
+    for duration in keys {
+        if curr_index as f32 <= p95 {
+            p95_average = p95_average + ((*duration - p95_average) / len);
+        }
+        if curr_index as f32 <= p99 {
+            p99_average = p99_average + ((*duration - p99_average) / len);
+        }
+        curr_index += 1;
+    }
+
+    return UrlStats {
+        average: avg,
+        mean: mean,
+        p99: p99_average,
+        p95: p95_average
+    };
+}
 struct Terminal {
     count_lines: usize,
     term: Term,
@@ -54,16 +147,23 @@ impl Terminal {
         term.write_line(&format!("Number of users: {}, failed users: {}", results.current_users, results.num_of_failed_users))?;
         term.write_line(&format!("Duration: {}", results.duration))?;
 
-        for (id, result) in results.url_results.iter() {
+        for (id, url_results) in results.url_results.iter() {
+            let url_stats = calculate_stats(&url_results.durations);
+    
             term.write_line(&format!("\t ID: {}", id))?;
-            term.write_line(&format!("\t\t Number of requests: {}", result.num_of_requests))?;
-            term.write_line(&format!("\t\t Number of errors: {}", result.num_of_errors))?;
-            for (err_type, counter) in result.error_types.iter() {
+            term.write_line(&format!("\t\t Number of requests: {}", url_results.num_of_requests))?;
+            term.write_line(&format!("\t\t Number of errors: {}", url_results.num_of_errors))?;
+
+            for (err_type, counter) in url_results.error_types.iter() {
                 term.write_line(&format!("\t\t\t{} errror: {}", print_error_type(err_type), counter))?;
                 self.count_lines += 1;
             }
-            term.write_line(&format!("\t\t Average duration: {}", result.average_duration))?;
-            self.count_lines += 4;
+            term.write_line(&format!("\t\t Average duration: {}", url_stats.average))?;
+            term.write_line(&format!("\t\t Mean duration: {}", url_stats.mean))?;
+            term.write_line(&format!("\t\t P99 Average: {}", url_stats.p99))?;
+            term.write_line(&format!("\t\t P95 Average: {}", url_stats.p95))?;
+
+            self.count_lines += 7;
         }
         term.write_line("=============================================")?;
         self.count_lines += 4;
@@ -85,7 +185,7 @@ fn aggregate_results(url_results: &mut HashMap<String, UrlResults>, results: Vec
         let entry = url_results.entry(result.id).or_insert(UrlResults {
             num_of_requests: 0,
             num_of_errors: 0,
-            average_duration: 0,
+            durations: HashMap::new(),
             error_types: HashMap::new(),
         });
 
@@ -95,7 +195,14 @@ fn aggregate_results(url_results: &mut HashMap<String, UrlResults>, results: Vec
             let error_type_counter = entry.error_types.entry(result.error_type).or_insert(0);
             *error_type_counter += 1;
         } else {
-            entry.average_duration = entry.average_duration + ((result.duration - entry.average_duration) / (entry.num_of_requests as isize - entry.num_of_errors as isize));
+            // increment duration index in durations frequency table
+            let duration = result.duration;
+
+            if let Some(counter) = entry.durations.get_mut(&result.duration) {
+                *counter += 1;
+            } else {
+                entry.durations.insert(duration, 1);
+            }
         }
     }
 }

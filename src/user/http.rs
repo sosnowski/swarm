@@ -108,7 +108,7 @@ async fn make_request(id: &String, client: &Client<HttpsConnector<HttpConnector>
         Duration::from_secs(10),
         client.request(request)
     ).await;
-    let elapsed: isize = started_at.elapsed().as_millis().try_into().unwrap();
+    let elapsed: usize = started_at.elapsed().as_millis().try_into().unwrap();
 
     let task_result: TaskResult = match result {
         Ok(req_result) => match req_result {
